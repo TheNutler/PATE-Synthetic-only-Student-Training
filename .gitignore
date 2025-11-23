@@ -44,16 +44,29 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 
-# Model files (if large - uncomment if needed)
-# *.pth
-# *.pkl
-# *.h5
+# Model files - DO NOT COMMIT (these are large generated files)
+# Teachers train their own models, student model is also generated
+*.pth
+*.pkl
+*.h5
+trained_nets_gpu/
+student_models/
 
 # Docker
 .dockerignore
 
 # Logs
 *.log
+teacher_logs/
+orchestrator_logs/
+
+# Process ID files (temporary runtime files)
+*_pid.txt
+*_pids.txt
+*.pid
+
+# PATE results (generated artifacts)
+pate_results.csv
 
 # Jupyter
 .ipynb_checkpoints
