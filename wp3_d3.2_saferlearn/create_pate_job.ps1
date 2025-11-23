@@ -2,35 +2,35 @@
 <#
 .SYNOPSIS
     Creates a PATE job with differential privacy enabled via the API.
-    
+
 .DESCRIPTION
     This script creates a PATE job by:
     1. Fetching active worker UUIDs from the orchestrator
     2. Creating a job request with DP enabled
     3. Submitting the job via PUT request to the API
-    
+
 .PARAMETER DpValue
     Differential privacy parameter value (default: 0.5)
-    
+
 .PARAMETER UseDP
     Enable/disable differential privacy (default: $true)
-    
+
 .PARAMETER NumSamples
     Number of samples to process (default: 1000)
-    
+
 .PARAMETER OrchestratorHost
     Orchestrator host (default: localhost)
-    
+
 .PARAMETER OrchestratorPort
     Orchestrator port (default: 5000)
-    
+
 .EXAMPLE
     .\create_pate_job.ps1 -DpValue 0.5 -UseDP $true
 #>
 
 param(
     [float]$DpValue = 0.5,
-    [bool]$UseDP = $true,
+    [bool]$UseDP = $false,
     [int]$NumSamples = 1000,
     [string]$OrchestratorHost = "localhost",
     [int]$OrchestratorPort = 5000,
@@ -81,7 +81,7 @@ Write-Host ""
 try {
     $jobResponse = Invoke-WebRequest -Uri "$baseUrl/job" -Method PUT -ContentType "application/json" -Body $jobBody -ErrorAction Stop
     $job = $jobResponse.Content | ConvertFrom-Json
-    
+
     Write-Host "===========================================" -ForegroundColor Green
     Write-Host "Job Created Successfully!" -ForegroundColor Green
     Write-Host "===========================================" -ForegroundColor Green
@@ -100,7 +100,7 @@ try {
     Write-Host "  curl http://${OrchestratorHost}:${OrchestratorPort}/jobs" -ForegroundColor White
     Write-Host "  curl http://${OrchestratorHost}:${OrchestratorPort}/job/$($job.uuid)" -ForegroundColor White
     Write-Host ""
-    
+
 } catch {
     Write-Host "ERROR: Failed to create job" -ForegroundColor Red
     Write-Host "Error: $_" -ForegroundColor Red

@@ -63,8 +63,8 @@ def api_start_job() -> Response:
         dataset: str = body["dataset"]
         workers_list: List[Any] = body.get("workers", [])
         nb_classes: int = int(body["nbClasses"])
-        dp_value: float = float(body["dpValue"])
-        use_differential_privacy: bool = body["useDP"]
+        dp_value: float = float(body.get("dpValue", 0.0))
+        use_differential_privacy: bool = body.get("useDP", False)
         if not use_differential_privacy:
             dp_value = 0.0
         # mimick behavior for now

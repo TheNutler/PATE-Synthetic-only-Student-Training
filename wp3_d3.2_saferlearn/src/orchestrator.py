@@ -250,10 +250,10 @@ class Job:
         base_port: int = 1244,
     ) -> None:
         """Launch a PATE job with sequential batching
-        
+
         Starts teachers in batches, collects votes from each batch, then aggregates all votes.
         This avoids memory issues from running too many teachers simultaneously.
-        
+
         Args:
             nb_samples: Number of samples to label
             differential_privacy_parameter: DP parameter
@@ -269,32 +269,32 @@ class Job:
             from src.teacher_manager import start_teachers, wait_for_teachers_registration, stop_teachers
         except ImportError:
             from teacher_manager import start_teachers, wait_for_teachers_registration, stop_teachers
-        
+
         self._api_host = api_host
         self._api_port = api_port
         base_dir = Path(__file__).parent.parent
-        
+
         # Calculate number of batches
         num_batches = (num_teachers + batch_size - 1) // batch_size
         logger.info(f"Sequential batching: {num_teachers} teachers in {num_batches} batches of {batch_size}")
-        
+
         # Store all votes from all batches
         all_votes: List[Dict[str, Any]] = []  # Store all votes with worker info
         total_labeled_samples = -1
-        
+
         # Process each batch sequentially
         for batch_num in range(num_batches):
             batch_start = batch_num * batch_size
             batch_end = min(batch_start + batch_size, num_teachers)
             current_batch_size = batch_end - batch_start
-            
+
             logger.info(f"Processing batch {batch_num + 1}/{num_batches} (teachers {batch_start + 1}-{batch_end})...")
-            
+
             # Clean votes topic before starting this batch
             topic_name = "votes_pate"
             utilities.clean_topic(topic_name)
             logger.debug(f"Cleaned {topic_name} topic before batch {batch_num + 1}")
-            
+
             # Start teachers for this batch
             teacher_processes = start_teachers(
                 num_teachers=current_batch_size,
@@ -304,37 +304,39 @@ class Job:
                 orchestrator_port=api_port,
                 base_dir=base_dir,
             )
-            
+
             # Wait for teachers to register
             workers = wait_for_teachers_registration(
                 num_teachers=current_batch_size,
                 data_format=self.data_type,
                 timeout=60,
             )
-            
+
             if len(workers) == 0:
                 logger.error(f"No teachers registered in batch {batch_num + 1}, skipping batch")
                 stop_teachers(teacher_processes)
                 continue
-            
+
             if len(workers) < current_batch_size:
                 logger.warning(f"Only {len(workers)}/{current_batch_size} teachers registered in batch {batch_num + 1}")
-            
+
             # Update workers for this batch
             self.workers = workers
             self.params["nb_teachers"] = len(workers)
-            
+
             # Register workers for this batch with the job
             from db_utilities import register_job
             register_job(self.uuid, workers, self.data_type)
-            
+
             # Send parameters to this batch of teachers
             self.send_parameters()
-            
+
             # Collect votes from this batch
             logger.info(f"Collecting votes from batch {batch_num + 1}...")
             nb_labeled_samples = -1
-            
+
+            from alive_progress import alive_bar
+
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=len(workers) if len(workers) > 0 else 1
             ) as executor:
@@ -351,40 +353,43 @@ class Job:
                     ): worker
                     for worker in workers
                 }
-                for future in concurrent.futures.as_completed(future_to_worker):
-                    worker = future_to_worker[future]
-                    try:
-                        nb_labeled_samples_by_worker = future.result()
-                        logger.info(f"{worker} has labeled {nb_labeled_samples_by_worker} samples")
-                        if nb_labeled_samples == -1:
-                            nb_labeled_samples = nb_labeled_samples_by_worker
-                        elif nb_labeled_samples != nb_labeled_samples_by_worker:
-                            logger.error(
-                                f"{worker} has labeled {nb_labeled_samples_by_worker} samples while another has labeled {nb_labeled_samples}"
-                            )
-                        if total_labeled_samples == -1:
-                            total_labeled_samples = nb_labeled_samples_by_worker
-                    except Exception as exc:
-                        logger.error(f"{worker} generated an exception: {exc}")
-            
+                with alive_bar(len(workers), title=f"Batch {batch_num + 1}: Teachers labeling", bar="bubbles") as bar:
+                    for future in concurrent.futures.as_completed(future_to_worker):
+                        worker = future_to_worker[future]
+                        try:
+                            nb_labeled_samples_by_worker = future.result()
+                            logger.info(f"{worker} has labeled {nb_labeled_samples_by_worker} samples")
+                            if nb_labeled_samples == -1:
+                                nb_labeled_samples = nb_labeled_samples_by_worker
+                            elif nb_labeled_samples != nb_labeled_samples_by_worker:
+                                logger.error(
+                                    f"{worker} has labeled {nb_labeled_samples_by_worker} samples while another has labeled {nb_labeled_samples}"
+                                )
+                            if total_labeled_samples == -1:
+                                total_labeled_samples = nb_labeled_samples_by_worker
+                        except Exception as exc:
+                            logger.error(f"{worker} generated an exception: {exc}")
+                        finally:
+                            bar()
+
             # Read votes from Kafka for this batch
             from kafka import KafkaConsumer
             from kafka.errors import KafkaError
             import json
             import time as time_module
-            
+
             # Wait for votes to be published
             logger.info(f"Waiting for votes to be published from batch {batch_num + 1}...")
             time.sleep(5)  # Give teachers time to publish votes
-            
+
             logger.info(f"Reading votes from batch {batch_num + 1}...")
             topic_name = "votes_pate"
-            
+
             # Collect votes from Kafka for this batch
             batch_votes: List[Dict[str, Any]] = []
             vote_count = 0
             expected_votes = nb_labeled_samples * len(workers) if nb_labeled_samples > 0 else 0
-            
+
             try:
                 consumer: KafkaConsumer = utilities.connect_kafka_consumer(
                     topic_name,
@@ -392,54 +397,56 @@ class Job:
                     consumer_timeout_ms=60000,  # 60 second timeout
                     enable_auto_commit=False,
                 )
-                
+
                 start_time = time_module.time()
                 timeout = 120  # 120 seconds to collect votes
-                
-                while vote_count < expected_votes and (time_module.time() - start_time) < timeout:
-                    records = consumer.poll(timeout_ms=2000)
-                    if records:
-                        for _, consumer_records in records.items():
-                            for msg in consumer_records:
-                                try:
-                                    key_dict: Dict[str, Any] = json.loads(
-                                        (msg.key).decode("utf-8")
-                                    )
-                                    # Decode vote value - it's encoded as string for clear PATE
-                                    vote_value = msg.value
-                                    if isinstance(vote_value, bytes):
-                                        try:
-                                            vote_value = int(vote_value.decode("utf-8"))
-                                        except:
+
+                with alive_bar(expected_votes, title=f"Batch {batch_num + 1}: Collecting votes", bar="bubbles") as bar:
+                    while vote_count < expected_votes and (time_module.time() - start_time) < timeout:
+                        records = consumer.poll(timeout_ms=2000)
+                        if records:
+                            for _, consumer_records in records.items():
+                                for msg in consumer_records:
+                                    try:
+                                        key_dict: Dict[str, Any] = json.loads(
+                                            (msg.key).decode("utf-8")
+                                        )
+                                        # Decode vote value - it's encoded as string for clear PATE
+                                        vote_value = msg.value
+                                        if isinstance(vote_value, bytes):
+                                            try:
+                                                vote_value = int(vote_value.decode("utf-8"))
+                                            except:
+                                                vote_value = int(vote_value)
+                                        else:
                                             vote_value = int(vote_value)
-                                    else:
-                                        vote_value = int(vote_value)
-                                    
-                                    vote: Dict[str, Any] = {
-                                        "data": vote_value,
-                                        "key": int(key_dict["key"]),
-                                        "worker": key_dict["worker"],
-                                    }
-                                    batch_votes.append(vote)
-                                    vote_count += 1
-                                except Exception as e:
-                                    logger.warning(f"Error parsing vote: {e}")
-                                    logger.debug(f"Key: {msg.key}, Value: {msg.value}")
-                
+
+                                        vote: Dict[str, Any] = {
+                                            "data": vote_value,
+                                            "key": int(key_dict["key"]),
+                                            "worker": key_dict["worker"],
+                                        }
+                                        batch_votes.append(vote)
+                                        vote_count += 1
+                                        bar()
+                                    except Exception as e:
+                                        logger.warning(f"Error parsing vote: {e}")
+                                        logger.debug(f"Key: {msg.key}, Value: {msg.value}")
+
                 consumer.close()
             except KafkaError as err:
                 logger.error(f"Kafka error reading votes from batch {batch_num + 1}: {err}")
             except Exception as e:
                 logger.error(f"Error reading votes from batch {batch_num + 1}: {e}")
-            
+
             # Add batch votes to all votes
             all_votes.extend(batch_votes)
-            
+
             logger.info(f"Collected {len(batch_votes)} votes from batch {batch_num + 1}")
-            
+
             # Clean topic after collecting votes (prepare for next batch)
             utilities.clean_topic(topic_name)
-            
+
             # Stop teachers for this batch
             logger.info(f"Stopping teachers from batch {batch_num + 1}...")
             stop_teachers(teacher_processes, timeout=10)
@@ -448,44 +455,48 @@ class Job:
             # Workers will be automatically removed when heartbeat stops
             logger.debug(f"Batch {batch_num + 1} workers will timeout when heartbeat stops")
             
+            # Force garbage collection to free memory before next batch
+            import gc
+            gc.collect()
+            
             logger.info(f"Batch {batch_num + 1} complete. Moving to next batch...")
             time.sleep(2)  # Small delay between batches
-        
+
         # Aggregate all votes across all batches using existing aggregation method
         logger.info(f"Aggregating votes from all {num_batches} batches ({num_teachers} teachers total)...")
         logger.info(f"Total votes collected: {len(all_votes)}")
-        
+
         # Use the existing aggregation method
         # First, we need to sort votes by sample and teacher (same format as regular aggregation)
         if total_labeled_samples <= 0:
             logger.error("No labeled samples collected! Cannot aggregate votes.")
             update_job_state(self.uuid, "done")
             return
-            
+
         # Build a mapping of worker UUIDs to sequential teacher indices (0 to num_teachers-1)
         sorted_worker = []
         for vote in all_votes:
             if vote["worker"] not in sorted_worker:
                 sorted_worker.append(vote["worker"])
-        
+
         # Ensure we have all teachers accounted for
         if len(sorted_worker) != num_teachers:
             logger.warning(f"Expected {num_teachers} teachers but found {len(sorted_worker)} unique worker UUIDs in votes")
-        
+
         sorted_votes = [
             [0 for _ in range(num_teachers)] for _ in range(total_labeled_samples)
         ]
-        
+
         try:
             for vote in all_votes:
                 worker_uuid = vote["worker"]
                 if worker_uuid not in sorted_worker:
                     logger.warning(f"Unknown worker UUID in vote: {worker_uuid}")
                     continue
-                    
+
                 teacher_idx = sorted_worker.index(worker_uuid)
                 sample_idx = vote["key"]
-                
+
                 if sample_idx < len(sorted_votes) and teacher_idx < len(sorted_votes[sample_idx]):
                     sorted_votes[sample_idx][teacher_idx] = vote["data"]
                 else:
@@ -493,11 +504,11 @@ class Job:
         except (IndexError, KeyError) as err:
             logger.error(f"Error sorting votes: {err}")
             logger.debug(f"Sample count: {len(sorted_votes)}, Teacher count: {num_teachers}, Workers: {len(sorted_worker)}")
-        
+
         # Aggregate votes per sample using pate_aggregate
         aggregated_votes = []
         from alive_progress import alive_bar
-        
+
         with alive_bar(len(sorted_votes), bar="bubbles") as bar:
             for i in range(len(sorted_votes)):
                 winning_class = self.pate_aggregate(
@@ -505,9 +516,9 @@ class Job:
                 )
                 aggregated_votes.append(winning_class)
                 bar()
-        
+
         logger.info(f"Aggregated {len(aggregated_votes)} votes from all batches")
-        
+
         # Publish aggregated results
         topic_name = "model_pate"
         logger.info("Cleaning Topic")
@@ -525,7 +536,7 @@ class Job:
             utilities.publish_message(
                 kafka_producer, "nb_votes", "number_votes", total_labeled_samples
             )
-        
+
         update_job_state(self.uuid, "done")
         logger.info(f"Sequential batching job complete! Processed {num_teachers} teachers in {num_batches} batches.")
 

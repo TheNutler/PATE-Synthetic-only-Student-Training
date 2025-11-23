@@ -105,17 +105,31 @@ class ThalesDataOwner(DataOwner):
             train_kwargs.update(cuda_kwargs)
         logging.debug("Doing prediction....")
         result_np: np.array = np.array([int])
-        for data, target in dataset:
-            data = data.to(device)
-            outputs = model(data)
-            _, result = torch.max(outputs, 1)
-            for pred in result:
-                result_np = np.append(result_np, pred.cpu().detach().numpy())
-
+        model.eval()  # Set model to evaluation mode
+        with torch.no_grad():  # Disable gradient computation to save memory
+            for data, target in dataset:
+                data = data.to(device)
+                outputs = model(data)
+                _, result = torch.max(outputs, 1)
+                for pred in result:
+                    result_np = np.append(result_np, pred.cpu().detach().numpy())
+                # Explicitly delete tensors to free memory
+                del data, outputs, result
+                if device.type == 'cpu':
+                    # Force garbage collection for CPU to free memory immediately
+                    import gc
+                    gc.collect()
+        
         logging.debug(f"Nb of predictions {len(result_np)}")
         logging.debug(f"Predictions {result_np}")
         logging.debug("Prediction done....")
-
+        
+        # Clean up model
+        del model
+        if device.type == 'cpu':
+            import gc
+            gc.collect()
+        
         return list(result_np.tolist()[1:])
 
     def load_public_training_dataset(
@@ -136,10 +150,17 @@ class ThalesDataOwner(DataOwner):
             cuda_kwargs = {
                 "num_workers": 1,
                 "pin_memory": True,
-                "shuffle": True,
-                "batch_size": 1024,
+                "shuffle": False,  # CRITICAL: Must be False to maintain sequential ordering for label alignment
+                "batch_size": 32,  # Reduced from 1024 to avoid memory issues (further reduced for batch processing)
             }
             train_kwargs.update(cuda_kwargs)
+        else:
+            # CPU path: also ensure no shuffle for sequential ordering
+            cpu_kwargs = {
+                "shuffle": False,  # CRITICAL: Must be False to maintain sequential ordering for label alignment
+                "batch_size": 32,  # Reduced from 1024 to avoid memory issues (further reduced for batch processing)
+            }
+            train_kwargs.update(cpu_kwargs)
         transform = torchvision.transforms.Compose(
             [
                 torchvision.transforms.ToTensor(),
