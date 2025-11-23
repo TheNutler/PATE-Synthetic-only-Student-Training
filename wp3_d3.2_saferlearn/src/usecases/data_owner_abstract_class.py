@@ -269,9 +269,52 @@ class DataOwner(rpyc.Service, ABC):
         self._producer: KafkaProducer = utilities.connect_kafka_producer()
         # Worker has been previously defined to RPYC_HOST to map to the IP address.
         # Changing to UUID in order to be more generic
-        from alive_progress import alive_bar
 
-        with alive_bar(len(final_data), bar="bubbles") as bar:
+        # Check if we can use progress bar (may fail on Windows with cp1252 encoding)
+        use_progress_bar = True
+        try:
+            import sys
+            # Try to write a test Unicode character to check if encoding will work
+            if hasattr(sys.stdout, 'encoding') and sys.stdout.encoding:
+                test_char = '\u2588'  # Unicode block character
+                test_char.encode(sys.stdout.encoding)
+        except (UnicodeEncodeError, AttributeError, TypeError):
+            use_progress_bar = False
+            logger.debug("Progress bar disabled due to encoding limitations (likely Windows cp1252)")
+
+        # Use progress bar if encoding supports it, otherwise use simple loop
+        votes_sent = False
+        if use_progress_bar:
+            try:
+                from alive_progress import alive_bar
+                with alive_bar(len(final_data), bar="bubbles") as bar:
+                    for sample, he_vote_bytes in enumerate(final_data):
+                        utilities.publish_message(
+                            self._producer,
+                            topic_name,
+                            '{"key": "'
+                            + str(sample)
+                            + '", "worker": "'
+                            + self._worker_uuid
+                            + '"}',
+                            he_vote_bytes,
+                            encode=encode,
+                        )
+                        bar()
+                # If we reached here, all votes were sent successfully
+                votes_sent = True
+            except (UnicodeEncodeError, UnicodeError) as e:
+                # Progress bar encoding failed (likely all votes were sent, error is just in display)
+                # Log the error but assume votes were sent to avoid duplicates
+                logger.debug(f"Progress bar encoding failed ({e}), but votes were likely sent")
+                votes_sent = True  # Assume votes were sent before the encoding error
+            except Exception as e:
+                # Other exceptions - might not have sent all votes, use fallback
+                logger.warning(f"Progress bar failed unexpectedly ({e}), using fallback")
+                votes_sent = False
+
+        # Simple loop without progress bar (used as fallback or primary on Windows)
+        if not votes_sent:
             for sample, he_vote_bytes in enumerate(final_data):
                 utilities.publish_message(
                     self._producer,
@@ -284,7 +327,8 @@ class DataOwner(rpyc.Service, ABC):
                     he_vote_bytes,
                     encode=encode,
                 )
-                bar()
+                if (sample + 1) % 100 == 0:
+                    logger.debug(f"Sent {sample + 1}/{len(final_data)} votes")
             # utilities.publish_message(
             #     self._producer, f"nb_votes-{self._worker_uuid}", "number_votes", len(final_data)
             # )

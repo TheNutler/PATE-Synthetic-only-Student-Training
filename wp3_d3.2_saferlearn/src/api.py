@@ -61,7 +61,7 @@ def api_start_job() -> Response:
         algorithm: str = body["algorithm"]
         datatype: str = body["datatype"]
         dataset: str = body["dataset"]
-        workers_list: List[Any] = body["workers"]
+        workers_list: List[Any] = body.get("workers", [])
         nb_classes: int = int(body["nbClasses"])
         dp_value: float = float(body["dpValue"])
         use_differential_privacy: bool = body["useDP"]
@@ -70,6 +70,10 @@ def api_start_job() -> Response:
         # mimick behavior for now
         # nb_samples = body["nb_samples"]
         nb_samples = 1000
+        # Sequential batching parameters
+        num_teachers: int = int(body.get("numTeachers", 0))
+        batch_size: int = int(body.get("batchSize", 0))
+        use_sequential_batching: bool = num_teachers > 0 and batch_size > 0
     else:
         return Response(
             "No parameters received",
@@ -80,13 +84,30 @@ def api_start_job() -> Response:
     nb_computing_parties: int = app.config.get(
         "NB_COMPUTING_PARTIES"
     )  # TODO: pass it via gui
-    active_workers: List[Dict[str, Any]] = db_utilities.get_active_workers(
-        datatype=datatype, state="online"
-    )
-    workers: List[Dict[str, Any]] = active_workers[: len(workers_list)]
-    if len(workers) > 0:
+    
+    # Handle sequential batching mode
+    if use_sequential_batching:
+        # Sequential batching: orchestrator will start/stop teachers automatically
+        logger.info(f"Sequential batching mode: {num_teachers} teachers in batches of {batch_size}")
+        # Create dummy workers list for job initialization (will be populated per batch)
+        workers: List[Dict[str, Any]] = []
+        current_job: Job = Job(workers, nb_classes, algorithm, datatype, dataset)
+        # Don't register workers yet - will be done per batch
+    else:
+        # Original mode: use provided workers
+        active_workers: List[Dict[str, Any]] = db_utilities.get_active_workers(
+            datatype=datatype, state="online"
+        )
+        workers: List[Dict[str, Any]] = active_workers[: len(workers_list)]
+        if len(workers) == 0:
+            response: Response = Response(
+                "No workers affected to job", status=405, mimetype="application/json"
+            )
+            return response
         current_job: Job = Job(workers, nb_classes, algorithm, datatype, dataset)
         db_utilities.register_job(current_job.uuid, workers, datatype)
+    
+    if use_sequential_batching or len(workers) > 0:
         if algorithm == "mpc":
             active_computing_parties: List[Dict[str, Any]] = (
                 db_utilities.get_active_workers(
@@ -111,13 +132,24 @@ def api_start_job() -> Response:
             )
         elif algorithm == "pate":
             logger.debug("PATE")
-            thread = threading.Thread(
-                target=current_job.create_job_clear,
-                args=(
-                    nb_samples,
-                    dp_value,
-                ),
-            )
+            if use_sequential_batching:
+                thread = threading.Thread(
+                    target=current_job.create_job_clear_sequential,
+                    args=(
+                        nb_samples,
+                        dp_value,
+                        num_teachers,
+                        batch_size,
+                    ),
+                )
+            else:
+                thread = threading.Thread(
+                    target=current_job.create_job_clear,
+                    args=(
+                        nb_samples,
+                        dp_value,
+                    ),
+                )
         else:  # default is fhe
             logger.debug("PATE with FHE")
             thread = threading.Thread(

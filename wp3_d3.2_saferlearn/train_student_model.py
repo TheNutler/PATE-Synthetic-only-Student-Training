@@ -7,6 +7,7 @@ aggregated from teacher ensemble predictions via the PATE framework.
 
 import csv
 import argparse
+import sys
 from pathlib import Path
 
 import torch
@@ -14,6 +15,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
+
+# Try to import tqdm for progress bars, fall back to simple iteration if not available
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+    print("Warning: tqdm not available. Progress bars will be disabled.")
 
 
 # UCStubModel definition (same architecture as teachers)
@@ -137,6 +146,7 @@ def train_student_model(
     output_path.mkdir(parents=True, exist_ok=True)
 
     # Load PATE labels
+    print(f"Loading PATE aggregated labels from {pate_results_csv}...")
     pate_labels = load_pate_labels(pate_results_csv)
 
     # Setup transforms (same as used in data_owner_example.py)
@@ -146,7 +156,8 @@ def train_student_model(
     ])
 
     # Load MNIST test dataset (this is the public dataset used for PATE)
-    print(f"Loading MNIST dataset from {mnist_data_dir}...")
+    print(f"Loading MNIST test dataset from {mnist_data_dir}...")
+    print("Note: Using MNIST test set as public dataset (same dataset that teachers labeled)")
     mnist_dataset = datasets.MNIST(
         root=mnist_data_dir,
         train=False,  # Use test set as public dataset (same as PATE)
@@ -154,11 +165,13 @@ def train_student_model(
         transform=transform
     )
 
-    print(f"MNIST dataset loaded: {len(mnist_dataset)} samples")
+    print(f"MNIST test dataset loaded: {len(mnist_dataset)} samples")
 
     # Create custom dataset with PATE labels
+    print("Creating training dataset with PATE aggregated labels...")
     student_dataset = PATELabeledDataset(mnist_dataset, pate_labels)
     print(f"Student training dataset: {len(student_dataset)} samples")
+    print(f"Each sample pairs an MNIST image with its PATE aggregated label from {len(pate_labels)} teacher predictions")
 
     # Create data loader
     train_kwargs = {'batch_size': batch_size, 'shuffle': True}
@@ -183,14 +196,24 @@ def train_student_model(
 
     # Training loop
     print(f"\nStarting training for {epochs} epochs...")
+    print(f"Training on {len(student_dataset)} samples with PATE aggregated labels")
     student_model.train()
 
-    for epoch in range(epochs):
+    # Wrap epoch loop with progress bar if available
+    epoch_iter = tqdm(range(epochs), desc="Training Progress", unit="epoch") if HAS_TQDM else range(epochs)
+
+    for epoch in epoch_iter:
         total_loss = 0
         correct = 0
         total = 0
 
-        for batch_idx, (data, target) in enumerate(train_loader):
+        # Wrap batch loop with progress bar if available
+        if HAS_TQDM:
+            batch_iter = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False, unit="batch")
+        else:
+            batch_iter = train_loader
+
+        for batch_idx, (data, target) in enumerate(batch_iter):
             data, target = data.to(device), target.to(device)
 
             optimizer.zero_grad()
@@ -204,14 +227,28 @@ def train_student_model(
             correct += pred.eq(target.view_as(pred)).sum().item()
             total += target.size(0)
 
-            if batch_idx % 50 == 0:
+            # Update progress bar if using tqdm
+            if HAS_TQDM:
+                current_accuracy = 100. * correct / total
+                batch_iter.set_postfix({
+                    'Loss': f'{loss.item():.4f}',
+                    'Acc': f'{current_accuracy:.2f}%'
+                })
+            elif batch_idx % 50 == 0:
                 print(f'  Epoch {epoch+1}/{epochs}, Batch {batch_idx}/{len(train_loader)}, '
                       f'Loss: {loss.item():.4f}, '
                       f'Accuracy: {100.*correct/total:.2f}%')
 
         avg_loss = total_loss / len(train_loader)
         accuracy = 100. * correct / total
-        print(f'Epoch {epoch+1}/{epochs}: '
+        
+        if HAS_TQDM:
+            epoch_iter.set_postfix({
+                'Avg Loss': f'{avg_loss:.4f}',
+                'Accuracy': f'{accuracy:.2f}%'
+            })
+        
+        print(f'Epoch {epoch+1}/{epochs} completed: '
               f'Average Loss: {avg_loss:.4f}, '
               f'Train Accuracy: {accuracy:.2f}%')
 
@@ -228,14 +265,21 @@ def train_student_model(
     test_total = 0
     test_loss = 0
 
+    # Wrap evaluation with progress bar if available
+    eval_iter = tqdm(test_loader, desc="Evaluating", unit="batch") if HAS_TQDM else test_loader
+
     with torch.no_grad():
-        for data, target in test_loader:
+        for data, target in eval_iter:
             data, target = data.to(device), target.to(device)
             output = student_model(data)
             test_loss += F.nll_loss(output, target, reduction='sum').item()
             pred = output.argmax(dim=1, keepdim=True)
             test_correct += pred.eq(target.view_as(pred)).sum().item()
             test_total += target.size(0)
+            
+            if HAS_TQDM:
+                current_acc = 100. * test_correct / test_total if test_total > 0 else 0
+                eval_iter.set_postfix({'Accuracy': f'{current_acc:.2f}%'})
 
     # Also check accuracy against original MNIST labels (for comparison)
     print("Comparing predictions with original MNIST labels...")
@@ -247,8 +291,10 @@ def train_student_model(
     )
 
     original_correct = 0
+    compare_range = tqdm(range(len(student_dataset)), desc="Comparing with original labels", unit="sample") if HAS_TQDM else range(len(student_dataset))
+    
     with torch.no_grad():
-        for idx in range(len(student_dataset)):
+        for idx in compare_range:
             mnist_idx = student_dataset.valid_indices[idx]
             # Get original label from MNIST dataset
             _, original_label = original_dataset[mnist_idx]
@@ -259,6 +305,10 @@ def train_student_model(
             pred = output.argmax(dim=1).item()
             if pred == original_label:
                 original_correct += 1
+            
+            if HAS_TQDM and (idx + 1) % 100 == 0:
+                current_acc = 100. * original_correct / (idx + 1)
+                compare_range.set_postfix({'Accuracy': f'{current_acc:.2f}%'})
 
     test_accuracy_pate = 100. * test_correct / test_total
     test_accuracy_original = 100. * original_correct / len(student_dataset)
