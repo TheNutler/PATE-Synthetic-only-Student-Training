@@ -6,6 +6,8 @@ and saves them in the trained_nets_gpu directory structure for use by teachers.
 """
 
 from pathlib import Path
+import json
+import random
 
 import torch
 import torch.nn as nn
@@ -187,6 +189,10 @@ def main():
                         help='Path to MNIST dataset (default: src/input-data/MNIST)')
     parser.add_argument('--output-dir', type=str, default='trained_nets_gpu',
                         help='Output directory for models (default: trained_nets_gpu)')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for data partitioning (default: 42)')
+    parser.add_argument('--save-shards', type=str, default='shard_indices.json',
+                        help='Path to save shard indices JSON file (default: shard_indices.json)')
 
     args = parser.parse_args()
 
@@ -236,10 +242,42 @@ def main():
     # Verify we have enough data for all teachers
     total_samples = len(train_dataset_full)
     samples_per_teacher = total_samples // args.num_models
-    print(f'Each teacher will get {samples_per_teacher} training samples')
+    print(f'Each teacher will get approximately {samples_per_teacher} training samples')
 
     if samples_per_teacher < 1:
         raise ValueError(f'Not enough training samples ({total_samples}) for {args.num_models} teachers')
+
+    # Set random seed for reproducibility
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+    print(f'Using random seed: {args.seed}')
+
+    # Create random permutation of indices for random partitioning
+    all_indices = list(range(total_samples))
+    random.shuffle(all_indices)
+    print(f'Randomly shuffled {total_samples} indices')
+
+    # Partition indices into disjoint shards
+    shard_indices = {}
+    for model_idx in range(args.num_models):
+        start_idx = model_idx * samples_per_teacher
+        if model_idx == args.num_models - 1:  # Last teacher gets any remaining samples
+            end_idx = total_samples
+        else:
+            end_idx = start_idx + samples_per_teacher
+        
+        # Get the shuffled indices for this shard
+        shard_indices[model_idx] = sorted(all_indices[start_idx:end_idx])
+        print(f'Shard {model_idx}: {len(shard_indices[model_idx])} samples (indices {min(shard_indices[model_idx])} to {max(shard_indices[model_idx])})')
+
+    # Save shard indices to disk for reproducibility
+    shards_file = base_dir / args.save_shards
+    with open(shards_file, 'w') as f:
+        json.dump(shard_indices, f, indent=2)
+    print(f'\nShard indices saved to: {shards_file}')
 
     # Create test loader
     test_loader = DataLoader(
@@ -252,14 +290,9 @@ def main():
         print(f'Training Teacher {model_idx + 1}/{args.num_models}')
         print(f'{"="*60}')
 
-        # Calculate indices for this teacher's subset
-        start_idx = model_idx * samples_per_teacher
-        end_idx = start_idx + samples_per_teacher
-        if model_idx == args.num_models - 1:  # Last teacher gets any remaining samples
-            end_idx = total_samples
-
-        indices = list(range(start_idx, end_idx))
-        print(f'Teacher {model_idx + 1} using samples {start_idx} to {end_idx-1} ({len(indices)} samples)')
+        # Get indices for this teacher's subset from the pre-computed shards
+        indices = shard_indices[model_idx]
+        print(f'Teacher {model_idx + 1} using {len(indices)} samples (indices: {min(indices)} to {max(indices)})')
 
         # Create subset for this teacher
         teacher_subset = Subset(train_dataset_full, indices)

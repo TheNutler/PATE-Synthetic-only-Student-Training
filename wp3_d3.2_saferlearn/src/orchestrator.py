@@ -421,6 +421,11 @@ class Job:
                                         else:
                                             vote_value = int(vote_value)
 
+                                        # Validate vote value is in valid range (0 to nb_classes-1)
+                                        if vote_value < 0 or vote_value >= self.params["nb_classes"]:
+                                            logger.warning(f"Invalid vote value {vote_value} (expected 0-{self.params['nb_classes']-1}) from worker {key_dict.get('worker', 'unknown')} for sample {key_dict.get('key', 'unknown')}")
+                                            continue  # Skip invalid votes
+
                                         vote: Dict[str, Any] = {
                                             "data": vote_value,
                                             "key": int(key_dict["key"]),
@@ -450,15 +455,15 @@ class Job:
             # Stop teachers for this batch
             logger.info(f"Stopping teachers from batch {batch_num + 1}...")
             stop_teachers(teacher_processes, timeout=10)
-            
+
             # Clean up workers from database (optional - they'll timeout anyway)
             # Workers will be automatically removed when heartbeat stops
             logger.debug(f"Batch {batch_num + 1} workers will timeout when heartbeat stops")
-            
+
             # Force garbage collection to free memory before next batch
             import gc
             gc.collect()
-            
+
             logger.info(f"Batch {batch_num + 1} complete. Moving to next batch...")
             time.sleep(2)  # Small delay between batches
 
@@ -483,15 +488,28 @@ class Job:
         if len(sorted_worker) != num_teachers:
             logger.warning(f"Expected {num_teachers} teachers but found {len(sorted_worker)} unique worker UUIDs in votes")
 
+        logger.info(f"Total votes collected: {len(all_votes)}, Unique teachers: {len(sorted_worker)}, Expected teachers: {num_teachers}")
+        logger.debug(f"Teacher UUIDs: {sorted_worker[:5]}...")  # Log first 5 for debugging
+
+        # Check vote value distribution
+        from collections import Counter
+        vote_value_dist = Counter([v["data"] for v in all_votes])
+        logger.info(f"Vote value distribution (all votes): {dict(sorted(vote_value_dist.items()))}")
+        logger.info(f"Labels in votes: {sorted(vote_value_dist.keys())}, Expected: 0-{self.params['nb_classes']-1}")
+
+        # Initialize with -1 as sentinel value for missing votes (not 0, which is a valid label!)
         sorted_votes = [
-            [0 for _ in range(num_teachers)] for _ in range(total_labeled_samples)
+            [-1 for _ in range(num_teachers)] for _ in range(total_labeled_samples)
         ]
 
         try:
+            votes_stored = 0
+            votes_skipped = 0
             for vote in all_votes:
                 worker_uuid = vote["worker"]
                 if worker_uuid not in sorted_worker:
                     logger.warning(f"Unknown worker UUID in vote: {worker_uuid}")
+                    votes_skipped += 1
                     continue
 
                 teacher_idx = sorted_worker.index(worker_uuid)
@@ -499,8 +517,18 @@ class Job:
 
                 if sample_idx < len(sorted_votes) and teacher_idx < len(sorted_votes[sample_idx]):
                     sorted_votes[sample_idx][teacher_idx] = vote["data"]
+                    votes_stored += 1
                 else:
                     logger.warning(f"Vote index out of range: sample={sample_idx}, teacher={teacher_idx}")
+                    votes_skipped += 1
+
+            logger.info(f"Votes stored: {votes_stored}, Votes skipped: {votes_skipped}, Total samples: {len(sorted_votes)}")
+
+            # Check for samples with missing votes
+            samples_with_all_votes = sum(1 for sample_votes in sorted_votes if all(v >= 0 for v in sample_votes))
+            samples_with_missing_votes = len(sorted_votes) - samples_with_all_votes
+            if samples_with_missing_votes > 0:
+                logger.warning(f"{samples_with_missing_votes} samples have missing votes (out of {len(sorted_votes)} total)")
         except (IndexError, KeyError) as err:
             logger.error(f"Error sorting votes: {err}")
             logger.debug(f"Sample count: {len(sorted_votes)}, Teacher count: {num_teachers}, Workers: {len(sorted_worker)}")
@@ -509,13 +537,105 @@ class Job:
         aggregated_votes = []
         from alive_progress import alive_bar
 
+        # Diagnostic: Check vote distribution in first few samples
+        if len(sorted_votes) > 0:
+            sample_vote_counts = {}
+            for i in range(min(10, len(sorted_votes))):  # Check first 10 samples
+                valid_votes = [v for v in sorted_votes[i] if v >= 0]
+                if valid_votes:
+                    from collections import Counter
+                    vote_dist = Counter(valid_votes)
+                    sample_vote_counts[i] = dict(vote_dist)
+            logger.debug(f"Sample vote distribution (first 10): {sample_vote_counts}")
+
+            # Check for any samples with all -1 (no votes)
+            samples_with_no_votes = sum(1 for sv in sorted_votes if all(v == -1 for v in sv))
+            if samples_with_no_votes > 0:
+                logger.warning(f"{samples_with_no_votes} samples have no votes at all!")
+
+        # Track statistics for label 0 specifically
+        label_0_stats = {
+            "samples_with_votes": 0,
+            "samples_tied_for_max": 0,
+            "samples_won": 0,
+            "total_votes": 0,
+            "max_votes_in_sample": 0,
+        }
+
         with alive_bar(len(sorted_votes), bar="bubbles") as bar:
             for i in range(len(sorted_votes)):
+                # Count label 0 votes in this sample before aggregation
+                label_0_votes_in_sample = sum(1 for v in sorted_votes[i] if v == 0)
+                if label_0_votes_in_sample > 0:
+                    label_0_stats["samples_with_votes"] += 1
+                    label_0_stats["total_votes"] += label_0_votes_in_sample
+                    label_0_stats["max_votes_in_sample"] = max(
+                        label_0_stats["max_votes_in_sample"], label_0_votes_in_sample
+                    )
+
+                    # Check if label 0 ties for max in this sample
+                    score = [0] * self.params["nb_classes"]
+                    for vote in sorted_votes[i]:
+                        if vote >= 0:
+                            score[vote] += 1
+                    max_score = max(score)
+                    if label_0_votes_in_sample == max_score and score.count(max_score) > 1:
+                        label_0_stats["samples_tied_for_max"] += 1
+
                 winning_class = self.pate_aggregate(
                     i, sorted_votes[i], self.params["nb_classes"], differential_privacy_parameter
                 )
                 aggregated_votes.append(winning_class)
+
+                # Track if label 0 won
+                if winning_class == 0:
+                    label_0_stats["samples_won"] += 1
+
                 bar()
+
+        # Log label 0 statistics
+        if label_0_stats["samples_with_votes"] > 0:
+            avg_votes_per_sample = label_0_stats["total_votes"] / label_0_stats["samples_with_votes"]
+            win_rate = (label_0_stats["samples_won"] / label_0_stats["samples_with_votes"]) * 100
+            tie_rate = (label_0_stats["samples_tied_for_max"] / label_0_stats["samples_with_votes"]) * 100
+            expected_wins_based_on_votes = (label_0_stats["total_votes"] / len(all_votes)) * len(sorted_votes)
+            logger.info(
+                f"Label 0 statistics: {label_0_stats['samples_with_votes']} samples with votes, "
+                f"{label_0_stats['samples_won']} wins ({win_rate:.2f}% win rate), "
+                f"{label_0_stats['samples_tied_for_max']} ties for max ({tie_rate:.2f}% tie rate), "
+                f"avg {avg_votes_per_sample:.2f} votes per sample, max {label_0_stats['max_votes_in_sample']} votes in a sample"
+            )
+            logger.info(
+                f"Label 0 analysis: {label_0_stats['total_votes']} total votes ({label_0_stats['total_votes']/len(all_votes)*100:.2f}% of all votes), "
+                f"expected ~{expected_wins_based_on_votes:.0f} wins based on vote percentage, actual {label_0_stats['samples_won']} wins. "
+                f"Vote distribution is too sparse - label 0 rarely gets maximum votes in any sample."
+            )
+
+        # Verify vote counting accuracy
+        total_votes_verified = sum(
+            sum(1 for v in sample_votes if v >= 0)
+            for sample_votes in sorted_votes
+        )
+        logger.debug(f"Vote counting verification: {total_votes_verified} votes counted in sorted_votes, {len(all_votes)} votes in all_votes")
+        if total_votes_verified != len(all_votes):
+            logger.warning(f"Vote count mismatch! sorted_votes has {total_votes_verified} votes, all_votes has {len(all_votes)} votes")
+
+        # Diagnostic: Check aggregated vote distribution
+        from collections import Counter
+        aggregated_dist = Counter(aggregated_votes)
+        logger.info(f"Aggregated vote distribution: {dict(aggregated_dist)}")
+        logger.info(f"Labels present: {sorted(aggregated_dist.keys())}, Expected: 0-{self.params['nb_classes']-1}")
+
+        # Check for missing labels
+        expected_labels = set(range(self.params['nb_classes']))
+        present_labels = set(aggregated_dist.keys())
+        missing_labels = expected_labels - present_labels
+        if missing_labels:
+            logger.warning(f"Missing labels in aggregated results: {sorted(missing_labels)}")
+            # Count how many times each missing label appeared in raw votes
+            for missing_label in missing_labels:
+                missing_vote_count = sum(1 for v in all_votes if v["data"] == missing_label)
+                logger.warning(f"  Label {missing_label}: {missing_vote_count} raw votes ({missing_vote_count/len(all_votes)*100:.2f}%) but 0 wins")
 
         logger.info(f"Aggregated {len(aggregated_votes)} votes from all batches")
 
@@ -986,7 +1106,10 @@ class Job:
         # logger.debug("Votes : %s", inputs)
         score = [0] * nb_classes
         for vote in inputs:
-            score[vote] += 1
+            # CRITICAL FIX: Skip sentinel value -1 (missing votes)
+            # Previously, 0 was used for missing votes, which was incorrectly counted as label 0
+            if vote >= 0:  # Only count valid votes (0-9 for MNIST, etc.)
+                score[vote] += 1
         # logger.debug("Clear votes counting : %s", score)
         if sigma != 0:
             logger.info("Use differential privacy")
@@ -995,7 +1118,42 @@ class Job:
             logger.debug("Clear noise vector : %s", noise)
             score = list(score + noise)
             logger.debug("Clear noisy votes counting : %s", score)
-        result = score.index(max(score))
+
+        # Find winning class (label with maximum votes)
+        max_score = max(score)
+
+        # Find all labels with the maximum score (handle ties)
+        tied_labels = [i for i, s in enumerate(score) if s == max_score]
+
+        # Use random tie-breaking to avoid systematic bias
+        # This ensures fair distribution when multiple labels tie
+        if len(tied_labels) > 1:
+            # Random selection from tied labels ensures fair distribution
+            result = int(np.random.choice(tied_labels))  # Convert to Python int for consistency
+            # Log ties for debugging (only for first few samples to avoid spam)
+            if index < 10:
+                logger.debug(f"Sample {index}: Tie between labels {tied_labels} with {max_score} votes each, randomly choosing {result}")
+        else:
+            # No tie, use the single winner
+            result = int(tied_labels[0])  # Convert to Python int for consistency
+
+        # Enhanced diagnostic: Track label 0 performance across all samples
+        # Count how many times label 0 has votes but doesn't win
+        if score[0] > 0:
+            if score[0] == max_score:
+                # Label 0 tied for max - track if it wins or loses
+                if result == 0:
+                    # Label 0 won (either alone or via tie-break)
+                    pass  # Success case, no need to log
+                else:
+                    # Label 0 tied but lost tie-break
+                    if index < 50:  # Log first 50 for debugging
+                        logger.debug(f"Sample {index}: Label 0 tied for max ({max_score}) but lost random tie-break to label {result}")
+            else:
+                # Label 0 has votes but didn't tie for max
+                if index < 50:  # Log first 50 for debugging
+                    logger.debug(f"Sample {index}: Label 0 has {score[0]} votes, max is {max_score} (label {result})")
+
         # logger.debug("Winning class : %s", result)
         return result
 
@@ -1084,8 +1242,9 @@ class Job:
         # Start the clear aggregation
         clear_aggregation_start_time = time.time()
 
+        # Initialize with -1 as sentinel value for missing votes (not 0, which is a valid label!)
         sorted_votes = [
-            [0 for teacher in range(nb_teachers)] for sample in range(nb_samples)
+            [-1 for teacher in range(nb_teachers)] for sample in range(nb_samples)
         ]
         sorted_worker = []
         try:

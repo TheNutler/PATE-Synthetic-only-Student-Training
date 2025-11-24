@@ -93,7 +93,9 @@ class ThalesDataOwner(DataOwner):
             device = torch.device("cuda:1")
         else:
             device = torch.device("cpu")
-        model = UCStubModel().to(device)
+        # CRITICAL FIX: Use the loaded model instead of creating a new untrained one
+        # The model parameter contains the trained model loaded from disk
+        model = model.to(device)
         train_kwargs = {}
         if torch.cuda.is_available():
             cuda_kwargs = {
@@ -165,9 +167,8 @@ class ThalesDataOwner(DataOwner):
             [
                 torchvision.transforms.ToTensor(),
                 torchvision.transforms.Grayscale(num_output_channels=1),
-                torchvision.transforms.Normalize((0.5,), (0.5,)),
-                # torchvision.transforms.Normalize((0.1307,), (0.3081,)),
-                # torchvision.transforms.Resize((32, 32)),
+                # CRITICAL: Use same normalization as training (MNIST standard)
+                torchvision.transforms.Normalize((0.1307,), (0.3081,)),
             ]
         )
 
