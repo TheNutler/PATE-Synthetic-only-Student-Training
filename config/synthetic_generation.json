@@ -1,0 +1,31 @@
+{
+  "filtering": {
+    "min_per_class": 150,
+    "max_per_class": 500,
+    "default_confidence_threshold": 0.90,
+    "rare_class_threshold": 0.70,
+    "rare_classes": [1, 8],
+    "diversity_threshold": 3.0,
+    "min_memorization_distance": 2.0,
+    "quota_flexibility_percent": 10
+  },
+  "generation": {
+    "pool_size": 20000,
+    "latent_dim": 32,
+    "latent_mixing_ratio": 0.3,
+    "latent_noise_scale": 0.1,
+    "generate_until_target_per_class": false
+  },
+  "latent_steering": {
+    "enabled": true,
+    "steps": 20,
+    "learning_rate": 0.05,
+    "noise_scale": 0.1,
+    "use_for_classes_below_quota": true
+  },
+  "preprocessing": {
+    "normalize_mean": [0.1307],
+    "normalize_std": [0.3081]
+  }
+}
+

@@ -68,6 +68,16 @@ orchestrator_logs/
 # PATE results (generated artifacts)
 pate_results.csv
 
+# Synthetic data generation pipeline outputs
+pretrained_decoder/
+candidates/
+combined_dataset/
+teachers/
+
+# Dataset downloads (EMNIST/KMNIST raw data)
+wp3_d3.2_saferlearn/src/input-data/EMNIST/
+wp3_d3.2_saferlearn/src/input-data/KMNIST/
+
 # Jupyter
 .ipynb_checkpoints
 

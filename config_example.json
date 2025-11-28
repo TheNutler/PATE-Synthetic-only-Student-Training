@@ -1,0 +1,26 @@
+{
+  "decoder": {
+    "latent_dim": 32,
+    "pretrain_epochs": 50,
+    "batch_size": 128,
+    "learning_rate": 0.001,
+    "weight_decay": 0.00001,
+    "kl_annealing_epochs": 10
+  },
+  "generation": {
+    "pool_size": 5000,
+    "latent_mixing_ratio": 0.0
+  },
+  "filtering": {
+    "confidence_threshold": 0.9,
+    "min_nn_distance": 1.0,
+    "min_diversity_distance": 0.0,
+    "max_per_class": null
+  },
+  "evaluation": {
+    "diversity_ratio_target": 0.75,
+    "min_nn_distance_target": 1.0,
+    "histogram_l1_target": 0.2
+  }
+}
+

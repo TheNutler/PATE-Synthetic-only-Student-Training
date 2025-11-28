@@ -1,0 +1,9 @@
+# Requirements for synthetic data generation pipeline
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.20.0
+
+# Optional but recommended
+pillow>=9.0.0
+
