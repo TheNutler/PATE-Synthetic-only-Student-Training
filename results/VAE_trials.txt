@@ -1,0 +1,208 @@
+=========================================================
+VAE Performance Archive – All Experiments (Chronological)
+=========================================================
+
+Below are all evaluation results from earlier VAE attempts on teacher shard 0, including what was tuned in each iteration.
+
+These results are intended for inclusion in the thesis to show the evolution, failures, and motivation for switching to a hybrid VAE with a pretrained decoder.
+
+---------------------------------------------------------
+Experiment 1 – Early VAE (before architectural tuning)
+Tuning summary:
+
+Large VAE (high latent dim, deeper encoder/decoder)
+
+No KL annealing
+
+No small-shard optimizations
+
+Minimal or no augmentation
+
+Objective: baseline performance
+
+Results:
+
+Teacher ID: 0
+Generated Samples: 100
+
+Original Shard Size: 240
+Original Label Distribution:
+
+0: 20, 1: 35, 2: 26, 3: 17, 4: 26, 
+5: 20, 6: 26, 7: 19, 8: 25, 9: 26
+
+Statistics
+
+Original: Mean 0.12497, Std 0.30196
+Generated: Mean 0.10907, Std 0.24052
+
+Reconstruction Metrics
+
+MSE: 6.01
+
+BCE: 65.62
+
+Diversity
+
+Original: 9.98
+
+Generated: 7.28
+
+Histogram L1
+
+0.355
+
+Similarity Score
+
+62.59
+
+---------------------------------------------------------
+Experiment 2 – Compact VAE Attempt
+Tuning summary:
+
+Latent dimension reduced
+
+Model capacity shrunk (fewer channels)
+
+Still no KL annealing
+
+Still no augmentations
+
+Attempted to reduce reconstruction error with fewer parameters → backfired due to underfitting
+
+Results:
+
+Teacher ID: 0
+Generated Samples: 100
+
+Statistics
+Original: Mean 0.12497, Std 0.30196
+Generated: Mean 0.10561, Std 0.19366
+
+Reconstruction
+
+MSE: 19.98
+
+BCE: 107.95
+
+Diversity
+
+Original: 9.98
+
+Generated: 4.51
+
+Histogram L1
+
+0.538
+
+Similarity
+
+42.69
+
+---------------------------------------------------------
+Experiment 3 – VAE with KL Annealing + Slightly Improved Architecture
+Tuning summary:
+
+Added proper KL annealing (0→1)
+
+Improved architecture stability
+
+Slight augmentation added
+
+Generated larger sample pool (1000 samples)
+
+Still trained only on tiny shard → systematic underfitting
+
+Results:
+
+Teacher ID: 0
+Generated Samples: 1000
+
+Reconstruction
+
+MSE: 8.03
+
+BCE: 73.38
+
+KL: 3.03
+
+Diversity
+
+Original: Avg 9.98
+Generated: Avg 8.35
+Ratio: 0.836 → best diversity so far
+
+Histogram L1
+
+1.394 → class labels not preserved by decoder
+
+Memorization
+
+NN distances 4.29–12.49 → no memorization
+
+Pixel Stats
+
+Gen mean 0.174, std 0.229
+
+Similarity Score
+
+23.49
+
+Pass/Fail
+
+Only diversity passed → overall fail
+
+---------------------------------------------------------
+Experiment 4 – Last Regular VAE Attempt (Before Hybrid Approach)
+Tuning summary:
+
+Tried stronger reconstruction-focused objective
+
+Added stronger KL annealing
+
+Introduced loss weighting
+
+Attempted deeper decoder
+
+Training became unstable → worse recon & worse diversity
+
+Severe over-regularization + small shard = catastrophic failure
+
+Results:
+
+Teacher ID: 0
+Generated Samples: 100
+
+Reconstruction
+
+MSE: 23.86
+
+BCE: 148.99
+
+KL: 1.61
+
+Diversity
+
+Original: Avg 9.98
+Generated: Avg 5.32
+Ratio: 0.533 → mode collapse emerging
+
+Histogram L1
+
+1.766
+
+Memorization
+
+NN min ~3.74 → still no memorization
+
+Pixel Stats
+
+Gen mean 0.141, std 0.157
+
+Similarity Score
+
+25.12
+
+Pass/Fail
+
+All criteria failed → worst VAE performance

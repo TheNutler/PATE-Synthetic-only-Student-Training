@@ -1,0 +1,83 @@
+{
+  "diversity": {
+    "average_pairwise_distance": 10.107244491577148,
+    "num_samples": 1497,
+    "original_diversity": 9.977532386779785,
+    "diversity_ratio": 1.0130004193190323
+  },
+  "class_distribution": {
+    "synthetic": {
+      "2": 150,
+      "6": 150,
+      "0": 150,
+      "3": 150,
+      "4": 147,
+      "5": 150,
+      "8": 150,
+      "7": 150,
+      "9": 150,
+      "1": 150
+    },
+    "total_samples": 1497,
+    "original": {
+      "1": 35,
+      "4": 26,
+      "5": 20,
+      "3": 17,
+      "9": 26,
+      "7": 19,
+      "0": 20,
+      "2": 26,
+      "6": 26,
+      "8": 25
+    },
+    "histogram_l1_distance": 0.16826987307949232
+  },
+  "memorization": {
+    "min_nn_distance": 4.02816104888916,
+    "max_nn_distance": 11.759405136108398,
+    "mean_nn_distance": 8.16501522064209,
+    "median_nn_distance": 8.18298053741455,
+    "percentile_5": 6.179785251617432,
+    "percentile_25": 7.468256950378418,
+    "percentile_75": 8.926326751708984,
+    "percentile_95": 10.028637886047363
+  },
+  "resemblance_to_shard": {
+    "average_cross_set_distance_synthetic_to_shard": 10.610893249511719,
+    "average_cross_set_distance_shard_to_synthetic": 10.610892295837402,
+    "average_cross_set_distance_bidirectional": 10.61089277267456,
+    "nearest_neighbor_distances": {
+      "min": 4.02816104888916,
+      "max": 11.759405136108398,
+      "mean": 8.16501522064209,
+      "median": 8.18298053741455,
+      "std": 1.1315358877182007,
+      "percentile_5": 6.179785251617432,
+      "percentile_25": 7.468256950378418,
+      "percentile_75": 8.926326751708984,
+      "percentile_95": 10.028637886047363
+    },
+    "reverse_nearest_neighbor_distances": {
+      "min": 4.02816104888916,
+      "max": 9.141491889953613,
+      "mean": 6.769315719604492,
+      "median": 6.902431964874268,
+      "std": 0.9077391624450684
+    },
+    "interpretation": {
+      "lower_cross_set_distance": "Synthetic samples are closer to shard (higher resemblance)",
+      "higher_cross_set_distance": "Synthetic samples are farther from shard (lower resemblance, more diverse)",
+      "lower_nn_distance": "Some synthetic samples closely match shard samples (potential memorization risk)",
+      "higher_nn_distance": "Synthetic samples are sufficiently different from shard (good privacy)"
+    }
+  },
+  "similarity_score": 0.4778137545115799,
+  "metadata": {
+    "synthetic_samples_path": "teachers\\teacher_0\\synthetic_samples.pt",
+    "synthetic_labels_path": "teachers\\teacher_0\\labels.csv",
+    "original_shard_path": null,
+    "num_synthetic_samples": 1497,
+    "num_original_samples": 240
+  }
+}

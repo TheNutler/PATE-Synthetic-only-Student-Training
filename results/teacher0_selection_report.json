@@ -1,0 +1,65 @@
+{
+  "num_generated": 50000,
+  "num_selected": 1500,
+  "class_distribution": {
+    "0": 150,
+    "1": 150,
+    "2": 150,
+    "3": 150,
+    "4": 150,
+    "5": 150,
+    "6": 150,
+    "7": 150,
+    "8": 150,
+    "9": 150
+  },
+  "avg_confidence_per_class": {
+    "0": 0.9999513030052185,
+    "1": 0.9131393432617188,
+    "2": 0.999961256980896,
+    "3": 0.9980284571647644,
+    "4": 0.9992746710777283,
+    "5": 0.9969037771224976,
+    "6": 0.9999164938926697,
+    "7": 0.9955112934112549,
+    "8": 0.9844667315483093,
+    "9": 0.9909123778343201
+  },
+  "rejected_low_confidence": 31339,
+  "rejected_diversity": 0,
+  "rejected_memorization": 0,
+  "used_latent_steering": {},
+  "final_histogram_l1": null,
+  "diversity_ratio": null,
+  "filters_applied": {
+    "default_confidence_threshold": 0.9,
+    "rare_class_threshold": 0.7,
+    "rare_classes": [
+      1,
+      8
+    ],
+    "min_per_class": 150,
+    "max_per_class": 500,
+    "memorization_check": false,
+    "min_memorization_distance": null,
+    "class_quota": true,
+    "quota_flexibility_percent": 10.0,
+    "diversity_enforcement": false,
+    "diversity_threshold": null,
+    "latent_steering_enabled": true
+  },
+  "statistics": {
+    "average_confidence": 0.987806499004364,
+    "min_confidence": 0.8267451524734497,
+    "max_confidence": 0.9999996423721313,
+    "median_confidence": 0.9981802701950073,
+    "average_pairwise_distance": 10.105591773986816,
+    "diversity_ratio": null
+  },
+  "candidate_pool_path": "candidates\\candidates_teacher_0.pt",
+  "teacher_model_path": "wp3_d3.2_saferlearn\\trained_nets_gpu\\0\\model.pth",
+  "samples_path": "teachers\\teacher_0\\synthetic_samples.pt",
+  "labels_path": "teachers\\teacher_0\\labels.csv",
+  "config_used": "config\\synthetic_generation.json",
+  "samples_hash": "fa8aa00fedb22efcb8813be62dea3d3bfd22a0835d9696f47f7cec9c637d05ee"
+}
