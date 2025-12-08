@@ -1,0 +1,10 @@
+{
+  "model_path": "D:\\Documents\\TUWien\\MA\\Thesis\\PATE\\student_models_9k\\student_model_best.pth",
+  "dataset": "MNIST test",
+  "num_samples": 10000,
+  "test_loss": 0.9382816811561584,
+  "test_accuracy": 80.53,
+  "batch_size": 256,
+  "device": "cpu",
+  "timestamp": "2025-12-08T14:36:56.935231Z"
+}
