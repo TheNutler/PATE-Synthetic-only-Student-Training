@@ -398,9 +398,13 @@ def main():
     parser.add_argument('--min-per-class', type=int,
                         help='Minimum samples per class (overrides config)')
     parser.add_argument('--min-diversity-distance', type=float, default=None,
-                        help='Minimum pairwise distance for diversity (overrides config)')
+                        help='Minimum pairwise distance for diversity (overrides config, set to 0 to disable)')
+    parser.add_argument('--disable-diversity', action='store_true',
+                        help='Disable diversity filter entirely for maximum speed (not recommended for quality)')
     parser.add_argument('--min-nn-distance', type=float, default=None,
                         help='Minimum nearest neighbor distance for memorization check (overrides config)')
+    parser.add_argument('--target-samples', type=int, default=None,
+                        help='Target number of samples to select (selects top N by confidence after all filtering)')
     parser.add_argument('--out-dir', type=str, required=True,
                         help='Output directory for synthetic samples')
     parser.add_argument('--batch-size', type=int, default=128,
@@ -617,6 +621,24 @@ def main():
         )
         rejected_diversity = before_count - len(filtered_candidates)
         print(f'After diversity filter: {len(filtered_candidates)}/{before_count} samples (rejected: {rejected_diversity})')
+    
+    # 7. Select target number of samples (if specified)
+    if args.target_samples is not None:
+        target_samples = args.target_samples
+        if len(filtered_candidates) > target_samples:
+            print(f'\nSelecting top {target_samples} samples by confidence (from {len(filtered_candidates)} available)...')
+            # Sort by confidence (descending)
+            sorted_idx = torch.argsort(filtered_confidences, descending=True)
+            selected_idx = sorted_idx[:target_samples]
+            filtered_candidates = filtered_candidates[selected_idx]
+            filtered_labels = filtered_labels[selected_idx]
+            filtered_confidences = filtered_confidences[selected_idx]
+            print(f'Selected {len(filtered_candidates)} samples')
+        elif len(filtered_candidates) < target_samples:
+            print(f'\nWarning: Only {len(filtered_candidates)} samples available, but {target_samples} requested')
+            print(f'Using all {len(filtered_candidates)} available samples')
+        else:
+            print(f'\nExactly {target_samples} samples available, using all')
     
     # Compute final statistics
     class_dist = compute_class_distribution(filtered_labels.numpy())

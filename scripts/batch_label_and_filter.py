@@ -8,8 +8,10 @@ for each teacher model found in the trained_nets_gpu directory.
 import argparse
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional
+from datetime import timedelta
 
 
 def find_teacher_models(teachers_dir: Path) -> List[int]:
@@ -87,14 +89,15 @@ def generate_candidate_pool(
         cmd.extend(['--config', str(config_path)])
     
     try:
+        # Suppress verbose output during batch processing
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         if candidates_path.exists():
             return candidates_path
         else:
-            print(f'   Warning: Candidate pool not found after generation: {candidates_path}')
+            print(f'\n   Warning: Candidate pool not found after generation: {candidates_path}')
             return None
     except subprocess.CalledProcessError as e:
-        print(f'   Error generating candidate pool: {e.stderr[:200]}')
+        print(f'\n   Error generating candidate pool: {e.stderr[:200] if e.stderr else "Unknown error"}')
         return None
 
 
@@ -112,7 +115,9 @@ def process_teacher(
     shard_metadata_base: Optional[Path],
     batch_size: int,
     decoder_path: Optional[Path] = None,
-    config_path: Optional[Path] = None
+    config_path: Optional[Path] = None,
+    target_samples: Optional[int] = None,
+    disable_diversity: bool = False
 ) -> bool:
     """
     Process a single teacher by calling label_and_filter.py.
@@ -190,27 +195,29 @@ def process_teacher(
     if config_path and config_path.exists():
         cmd.extend(['--config', str(config_path)])
     
-    # Run command
+    # Add target samples if specified
+    if target_samples is not None:
+        cmd.extend(['--target-samples', str(target_samples)])
+    
+    # Add disable diversity flag if specified
+    if disable_diversity:
+        cmd.append('--disable-diversity')
+    
+    # Run command (capture output to reduce noise)
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        if result.stdout:
-            # Print last few lines of output for debugging
-            output_lines = result.stdout.strip().split('\n')
-            if len(output_lines) > 3:
-                print(f'   Output: ...{output_lines[-2]}')
-        print(f'✅ Teacher {teacher_id}: Success')
+        # Only show errors if they occur, not full output
         return True
     except subprocess.CalledProcessError as e:
-        print(f'❌ Teacher {teacher_id}: Failed')
-        # Print full error
+        # Print error details on failure
         if e.stderr:
-            print(f'   Stderr: {e.stderr}')
+            print(f'\n   Error: {e.stderr[:200]}')
         if e.stdout:
             # Print last few lines of stdout for context
             output_lines = e.stdout.strip().split('\n')
-            if len(output_lines) > 5:
-                print(f'   Last output lines:')
-                for line in output_lines[-5:]:
+            if len(output_lines) > 3:
+                print(f'   Last output:')
+                for line in output_lines[-3:]:
                     print(f'     {line}')
         return False
 
@@ -332,6 +339,17 @@ def main():
         default=123,
         help='Random seed for candidate generation (default: 123, will be offset by teacher_id)'
     )
+    parser.add_argument(
+        '--target-samples',
+        type=int,
+        default=None,
+        help='Target number of samples to select per teacher (selects top N by confidence after all filtering)'
+    )
+    parser.add_argument(
+        '--disable-diversity',
+        action='store_true',
+        help='Disable diversity filter entirely for maximum speed (not recommended for quality)'
+    )
     
     args = parser.parse_args()
     
@@ -416,13 +434,42 @@ def main():
     # Process each teacher
     successful = 0
     failed = 0
+    start_time = time.time()
+    teacher_times = []
+    
+    print('\n' + '=' * 60)
+    print('Starting batch processing...')
+    print('=' * 60)
     
     for i, teacher_id in enumerate(teacher_ids, 1):
-        print(f'\n[{i}/{len(teacher_ids)}] Processing teacher {teacher_id}...')
+        teacher_start_time = time.time()
+        
+        # Progress bar
+        progress_pct = (i - 1) / len(teacher_ids) * 100
+        bar_length = 40
+        filled = int(bar_length * (i - 1) / len(teacher_ids))
+        bar = '█' * filled + '░' * (bar_length - filled)
+        
+        # Estimated time remaining
+        if i > 1 and len(teacher_times) > 0:
+            avg_time = sum(teacher_times) / len(teacher_times)
+            remaining = avg_time * (len(teacher_ids) - i + 1)
+            remaining_str = str(timedelta(seconds=int(remaining)))
+        else:
+            remaining_str = "calculating..."
+        
+        # Elapsed time
+        elapsed = time.time() - start_time
+        elapsed_str = str(timedelta(seconds=int(elapsed)))
+        
+        print(f'\n[{i}/{len(teacher_ids)}] [{bar}] {progress_pct:.1f}%')
+        print(f'Processing teacher {teacher_id}...')
+        print(f'Elapsed: {elapsed_str} | Est. remaining: {remaining_str}')
         
         # Generate candidate pool for this teacher if requested
         if args.generate_candidates_per_teacher:
-            print(f'  Generating candidate pool for teacher {teacher_id}...')
+            gen_start = time.time()
+            print(f'  [1/2] Generating candidate pool ({pool_size} images)...', end=' ', flush=True)
             teacher_candidates_path = generate_candidate_pool(
                 teacher_id,
                 decoder_path,
@@ -434,16 +481,22 @@ def main():
                 args.seed if hasattr(args, 'seed') else 123,
                 config_path
             )
+            gen_time = time.time() - gen_start
             
             if teacher_candidates_path is None:
-                print(f'❌ Teacher {teacher_id}: Failed to generate candidate pool')
+                print(f'❌ Failed ({gen_time:.1f}s)')
                 failed += 1
                 continue
             
-            print(f'  ✓ Generated candidate pool: {teacher_candidates_path}')
+            print(f'✓ Done ({gen_time:.1f}s)')
             current_candidates_path = teacher_candidates_path
         else:
             current_candidates_path = candidates_path
+        
+        # Label and filter
+        label_start = time.time()
+        step_num = "2/2" if args.generate_candidates_per_teacher else "1/1"
+        print(f'  [{step_num}] Labeling and filtering...', end=' ', flush=True)
         
         success = process_teacher(
             teacher_id,
@@ -459,20 +512,50 @@ def main():
             shard_metadata_base,
             args.batch_size,
             decoder_path,
-            config_path
+            config_path,
+            args.target_samples,
+            args.disable_diversity
         )
+        
+        label_time = time.time() - label_start
+        teacher_total_time = time.time() - teacher_start_time
         
         if success:
             successful += 1
+            status = '✓'
         else:
             failed += 1
+            status = '❌'
+        
+        print(f'{status} Done ({label_time:.1f}s)')
+        print(f'  Teacher {teacher_id} total time: {teacher_total_time:.1f}s')
+        
+        teacher_times.append(teacher_total_time)
+        
+        # Update progress bar
+        progress_pct = i / len(teacher_ids) * 100
+        filled = int(bar_length * i / len(teacher_ids))
+        bar = '█' * filled + '░' * (bar_length - filled)
+        print(f'  Progress: [{bar}] {progress_pct:.1f}%')
     
     # Summary
+    total_time = time.time() - start_time
+    total_time_str = str(timedelta(seconds=int(total_time)))
+    avg_time = sum(teacher_times) / len(teacher_times) if teacher_times else 0
+    
     print('\n' + '=' * 60)
-    print(f'Batch processing complete!')
-    print(f'  Successful: {successful}/{len(teacher_ids)}')
-    print(f'  Failed: {failed}/{len(teacher_ids)}')
-    print(f'  Output directory: {output_dir}')
+    print('Batch processing complete!')
+    print('=' * 60)
+    print(f'Results:')
+    print(f'  Successful: {successful}/{len(teacher_ids)} ({successful/len(teacher_ids)*100:.1f}%)')
+    print(f'  Failed: {failed}/{len(teacher_ids)} ({failed/len(teacher_ids)*100:.1f}%)')
+    print(f'\nTiming:')
+    print(f'  Total time: {total_time_str}')
+    print(f'  Average per teacher: {avg_time:.1f}s')
+    if teacher_times:
+        print(f'  Fastest teacher: {min(teacher_times):.1f}s')
+        print(f'  Slowest teacher: {max(teacher_times):.1f}s')
+    print(f'\nOutput directory: {output_dir}')
     print('=' * 60)
 
 

@@ -72,11 +72,28 @@ pate_results.csv
 pretrained_decoder/
 candidates/
 combined_dataset/
+combined_9k_dataset/
+combined_teacher_vae_dataset/
 teachers/
+teachers_100x90/
+teacher_vaes/
+
+# Report files (generated outputs)
+results/*_report.json
+results/*report*.json
+*_report.json
+*report*.json
+training_report.json
+pretrain_report.json
+selection_report.json
+evaluation_report.json
+combined_synthetic_metadata.json
 
 # Dataset downloads (EMNIST/KMNIST raw data)
 wp3_d3.2_saferlearn/src/input-data/EMNIST/
 wp3_d3.2_saferlearn/src/input-data/KMNIST/
+wp3_d3.2_saferlearn/src/input-data/MNIST/
+data/MNIST/
 
 # Jupyter
 .ipynb_checkpoints
@@ -84,4 +101,3 @@ wp3_d3.2_saferlearn/src/input-data/KMNIST/
 # Environment variables
 .env
 .env.local
-
