@@ -1,0 +1,10 @@
+{
+  "model_path": "D:\\Documents\\TUWien\\MA\\Thesis\\PATE\\wp3_d3.2_saferlearn\\trained_nets_gpu\\0\\model.pth",
+  "dataset": "MNIST test",
+  "num_samples": 10000,
+  "test_loss": 0.551517955648899,
+  "test_accuracy": 84.83,
+  "batch_size": 256,
+  "device": "cpu",
+  "timestamp": "2025-12-08T14:42:59.452902Z"
+}
